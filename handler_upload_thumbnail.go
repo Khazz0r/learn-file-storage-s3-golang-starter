@@ -2,7 +2,12 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -28,10 +33,58 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	const maxMemory = 10 << 20
+	err = r.ParseMultipartForm(maxMemory)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to parse form", err)
+		return
+	}
+
+	file, header, err := r.FormFile("thumbnail")
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to return file from thumbnail", err)
+		return
+	}
+	defer file.Close()
+
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "Only jpeg and png are allowed for thumbnail file types", err)
+		return
+	}
+	fileType := strings.Split(mediaType, "/")[1]
+
+	videoMetadata, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't find video", err)
+		return
+	}
+	if videoMetadata.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "Not authorized to modify this video", nil)
+		return
+	}
+
+	imageDataURI := fmt.Sprintf("%v.%s", filepath.Join(cfg.assetsRoot, videoIDString), fileType)
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/%s", cfg.port, imageDataURI)
+	videoMetadata.ThumbnailURL = &thumbnailURL
+	newImageFile, err := os.Create(imageDataURI)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to create new image file", err)
+		return
+	}
+	_, err = io.Copy(newImageFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to write contents of thumbnail to new file", err)
+		return
+	}
 
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
-	// TODO: implement the upload here
+	err = cfg.db.UpdateVideo(videoMetadata)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "There was an error updating the video's data", err)
+		return
+	}
 
-	respondWithJSON(w, http.StatusOK, struct{}{})
+	respondWithJSON(w, http.StatusOK, videoMetadata)
 }
