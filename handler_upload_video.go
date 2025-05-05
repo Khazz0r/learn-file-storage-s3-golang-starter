@@ -113,10 +113,24 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		randKey = "other/" + randKey
 	}
 
+	// process the temp video so that it moves the moov atom to the beginning
+	processedTempVideoFilepath, err := processVideoForFastStart(tempVideoFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not process video file for fast start", err)
+		return
+	}
+	processedTempVideoFile, err := os.Open(processedTempVideoFilepath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not open processed temp video file", err)
+		return
+	}
+	defer os.Remove(processedTempVideoFile.Name())
+	defer processedTempVideoFile.Close()
+
 	params := &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(randKey),
-		Body:        tempVideoFile,
+		Body:        processedTempVideoFile,
 		ContentType: aws.String(mediaType),
 	}
 	_, err = cfg.s3Client.PutObject(r.Context(), params)
@@ -125,8 +139,14 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	videoURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, randKey)
-	videoMetadata.VideoURL = &videoURL
+	// create private URI and presign it to video metadata for private s3 bucket access
+	privateBucketURI := fmt.Sprintf("%s,%s", cfg.s3Bucket, randKey)
+	videoMetadata.VideoURL = &privateBucketURI
+	presignedVideoMetadata, err := cfg.dbVideoToSignedVideo(videoMetadata)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error creating presigned URL for video", err)
+		return
+	}
 
 	err = cfg.db.UpdateVideo(videoMetadata)
 	if err != nil {
@@ -134,5 +154,5 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, videoMetadata)
+	respondWithJSON(w, http.StatusOK, presignedVideoMetadata)
 }
