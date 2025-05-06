@@ -139,14 +139,9 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// create private URI and presign it to video metadata for private s3 bucket access
-	privateBucketURI := fmt.Sprintf("%s,%s", cfg.s3Bucket, randKey)
-	videoMetadata.VideoURL = &privateBucketURI
-	presignedVideoMetadata, err := cfg.dbVideoToSignedVideo(videoMetadata)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error creating presigned URL for video", err)
-		return
-	}
+	// create Cloudfront URL for content access
+	privateBucketURL := fmt.Sprintf("%s/%s", cfg.s3CfDistribution, randKey)
+	videoMetadata.VideoURL = &privateBucketURL
 
 	err = cfg.db.UpdateVideo(videoMetadata)
 	if err != nil {
@@ -154,5 +149,5 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, presignedVideoMetadata)
+	respondWithJSON(w, http.StatusOK, videoMetadata)
 }
